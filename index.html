@@ -16,7 +16,7 @@
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
   input[type="text"] { flex:1; min-width:220px; padding:12px 14px; border-radius:10px; border:1px solid #334155; background:#0b1220; color:#e2e8f0; font-size:16px; }
   .likert { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin:18px 0 8px; }
-  .likert button { width:44px; height:44px; border-radius:50%; border:1px solid #334155; background:#0b1220; color:#cbd5e1; font-size:16px; cursor:pointer; }
+  .likert button { width:44px; height:44px; border-radius:50%; border:1px solid #334155; background:#0b1220; color:#cbd5e1; font-size:16px; cursor:pointer; pointer-events:auto; position:relative; z-index:1; }
   .foot { display:flex; justify-content:space-between; gap:10px; color:#64748b; margin-top:16px; }
   .badge { display:inline-block; padding:4px 8px; border-radius:999px; background:#0b1220; border:1px solid #334155; color:#cbd5e1; font-size:12px; }
 </style>
@@ -115,6 +115,7 @@ function startSurvey(){
   renderQuestion();
 }
 
+/* === NEU: renderQuestion ohne inline onclick (mit addEventListener) === */
 function renderQuestion(){
   if (qIndex >= questions.length) return finish();
   const q = questions[qIndex];
@@ -124,19 +125,29 @@ function renderQuestion(){
   app.innerHTML = `
     <h1>Frage ${qIndex+1} von ${questions.length}</h1>
     <p>${q.text}</p>
-    <div class="likert">
-      ${q.scale.map(v => `<button onclick="saveAnswer(${JSON.stringify(q.id)}, ${v})">${v}</button>`).join('')}
-    </div>
+    <div class="likert" id="lk"></div>
     <div style="display:flex; justify-content:space-between; gap:10px; margin:4px 0 6px; color:#94a3b8;">
       <span>${leftAnchor}</span>
       <span>${rightAnchor}</span>
     </div>
-    <p style="text-align:center;color:#94a3b8;">(Klicke 1–5 oder nutze die Tastatur 1–5)</p>
+    <p style="text-align:center;color:#94a3b8;">(Klicke ${q.scale[0]}–${q.scale[q.scale.length-1]} oder nutze die Tastatur ${q.scale[0]}–${q.scale[q.scale.length-1]})</p>
     <div class="foot">
       <span class="badge">Fokusverluste: ${lostFocusCount}</span>
       <span class="badge">VP-ID: ${vpId}</span>
     </div>
   `;
+
+  // Buttons programmatisch einfügen + Click-Handler setzen
+  const lk = document.getElementById('lk');
+  q.scale.forEach(v => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = String(v);
+    b.addEventListener('click', () => saveAnswer(q.id, Number(v)));
+    lk.appendChild(b);
+  });
+
+  // Tastaturbedienung
   document.onkeydown = (e) => {
     if (/^[1-5]$/.test(e.key)) saveAnswer(q.id, Number(e.key));
   };
@@ -194,3 +205,4 @@ viewStart();
 </script>
 </body>
 </html>
+
