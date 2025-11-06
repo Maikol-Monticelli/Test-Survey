@@ -2,122 +2,195 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<title>PsychoJS Umfrage – mit Google Sheets Speicherung</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Online-Umfrage (Fokus-Tracking + Sheets)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  body {
-    background-color: #111;
-    color: #eee;
-    font-family: Arial, sans-serif;
-    text-align: center;
-    padding: 50px;
-  }
-  canvas { display: none; }
-  button {
-    background-color: #1e1e1e;
-    color: #fff;
-    border: 1px solid #555;
-    padding: 12px 28px;
-    border-radius: 10px;
-    font-size: 18px;
-    cursor: pointer;
-  }
-  button:hover { background-color: #333; }
+  :root { --bg:#0f172a; --fg:#e2e8f0; --muted:#94a3b8; --card:#111827; --accent:#22c55e; }
+  html,body { margin:0; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+  .wrap { min-height:100dvh; display:grid; place-items:center; padding:24px; }
+  .card { width:min(760px,92vw); background:var(--card); border:1px solid #1f2937; border-radius:16px; padding:28px; box-shadow:0 10px 30px rgba(0,0,0,.35); }
+  h1 { margin:0 0 8px; font-size:26px; }
+  p { color:var(--muted); line-height:1.6; }
+  .btn { display:inline-block; padding:12px 22px; border-radius:10px; border:1px solid #2b3545; background:#1f2937; color:var(--fg); cursor:pointer; font-size:16px; }
+  .btn.primary { background:var(--accent); border-color:#16a34a; color:#062813; font-weight:600; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  input[type="text"] { flex:1; min-width:220px; padding:12px 14px; border-radius:10px; border:1px solid #334155; background:#0b1220; color:#e2e8f0; font-size:16px; }
+  .likert { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin:18px 0 8px; }
+  .likert button { width:44px; height:44px; border-radius:50%; border:1px solid #334155; background:#0b1220; color:#cbd5e1; font-size:16px; cursor:pointer; }
+  .foot { display:flex; justify-content:space-between; gap:10px; color:#64748b; margin-top:16px; }
+  .badge { display:inline-block; padding:4px 8px; border-radius:999px; background:#0b1220; border:1px solid #334155; color:#cbd5e1; font-size:12px; }
 </style>
 </head>
 <body>
-<h1>PsychoJS Umfrage</h1>
-<p>Klicke auf „Start“, um zu beginnen.</p>
-<button id="startBtn">Start</button>
+<div class="wrap"><div class="card" id="app"></div></div>
 
 <script>
+/* ========= Einstellungen ========= */
+const GOOGLE_APPS_SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycbwkp-eKXcL6yihE_kGlY7_-capIvF26UuHM9JrVtk68v4NoZKkCAS5cPNnZamQ1dfOFzQ/exec";
+
+/* ========= State ========= */
+const app = document.getElementById('app');
 let started = false;
 let lostFocusCount = 0;
-let data = {};
+let data = { startedAt: null, finishedAt: null };
+const urlParams = new URLSearchParams(location.search);
+let vpId = urlParams.get("vp") || "";     // VP-ID aus URL, sonst leer
 
-// Wenn Fenster Fokus verliert
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden && started) {
-    lostFocusCount++;
-  }
-});
-
-document.getElementById("startBtn").addEventListener("click", () => {
-  document.getElementById("startBtn").remove();
-  startSurvey();
-});
-
-function startSurvey() {
-  started = true;
-  data.startedAt = new Date().toISOString();
-  showQuestion(0);
-}
-
+/* ========= Psychologische Fragen ========= */
 const questions = [
-  { text: "Wie zufrieden bist du heute?", scale: [1,2,3,4,5] },
-  { text: "Wie konzentriert warst du während der Umfrage?", scale: [1,2,3,4,5] },
-  { text: "Wie müde fühlst du dich?", scale: [1,2,3,4,5] }
+  { id:'focus_task', text:'Ich konnte meine Aufmerksamkeit auf die Aufgabe richten.', scale:[1,2,3,4,5], anchors:['trifft gar nicht zu','trifft völlig zu'] },
+  { id:'distraction_env', text:'Ich fühlte mich durch meine Umgebung (Geräusche, Personen, Benachrichtigungen) abgelenkt.', scale:[1,2,3,4,5], anchors:['gar nicht','sehr stark'] },
+  { id:'mind_wandering', text:'Meine Gedanken schweiften während der Aufgabe ab.', scale:[1,2,3,4,5], anchors:['gar nicht','sehr häufig'] },
+  { id:'cog_effort', text:'Die Bearbeitung erforderte merkliche geistige Anstrengung.', scale:[1,2,3,4,5], anchors:['gar nicht','sehr stark'] },
+  { id:'motivation', text:'Ich war motiviert, die Items sorgfältig zu beantworten.', scale:[1,2,3,4,5], anchors:['trifft gar nicht zu','trifft völlig zu'] },
+  { id:'clarity_instr', text:'Die Instruktionen waren klar und verständlich.', scale:[1,2,3,4,5], anchors:['trifft gar nicht zu','trifft völlig zu'] },
+  { id:'attn_check', text:'Aufmerksamkeitscheck: Bitte wählen Sie hier die 2.', scale:[1,2,3,4,5], anchors:['1','5'] },
+  { id:'honesty', text:'Ich habe meine Antworten ehrlich und nach bestem Wissen gegeben.', scale:[1,2,3,4,5], anchors:['trifft gar nicht zu','trifft völlig zu'] },
+  { id:'carefulness', text:'Ich habe mir Mühe gegeben, die Aussagen sorgfältig zu beurteilen.', scale:[1,2,3,4,5], anchors:['trifft gar nicht zu','trifft völlig zu'] },
+  { id:'pos_affect', text:'Im Moment fühle ich mich positiv gestimmt.', scale:[1,2,3,4,5], anchors:['überhaupt nicht','sehr stark'] },
+  { id:'stress_now', text:'Im Moment fühle ich mich gestresst.', scale:[1,2,3,4,5], anchors:['überhaupt nicht','sehr stark'] }
 ];
 
-function showQuestion(i) {
-  if (i >= questions.length) {
-    finish();
-    return;
+/* ========= Fokus-Tracking =========
+   1. Verlust: Warnung; 2. Verlust: Abbruch + Speicherung */
+document.addEventListener('visibilitychange', () => {
+  if (!started) return;
+  if (document.hidden) handleFocusLoss();
+});
+window.addEventListener('blur', () => {
+  if (!started) return;
+  handleFocusLoss();
+});
+function handleFocusLoss(){
+  lostFocusCount++;
+  if (lostFocusCount === 1) {
+    alert('Bitte bleibe in der Umfrage. Beim zweiten Fokusverlust wird die Umfrage beendet.');
+  } else if (lostFocusCount >= 2) {
+    finish('focus_lost_2x');
   }
-  const q = questions[i];
-  document.body.innerHTML = `
-    <h1>Frage ${i+1} von ${questions.length}</h1>
-    <p>${q.text}</p>
-    ${q.scale.map(v => `<button onclick="saveAnswer(${i}, ${v})">${v}</button>`).join(" ")}
+}
+
+/* ========= Start-Screen mit Erklärung ========= */
+function viewStart() {
+  app.innerHTML = `
+    <h1>Online-Umfrage</h1>
+    <p><b>Fokus-Hinweis:</b> Bitte bleibe während der Umfrage im aktuellen Browser-Tab und wechsle nicht zu anderen Programmen.<br>
+    <b>Regel:</b> Beim <b>ersten</b> Fokusverlust erhältst du eine Warnung. Beim <b>zweiten</b> wird die Umfrage automatisch beendet
+    und die bis dahin erfassten Daten gespeichert.</p>
+
+    <div class="row" style="margin:14px 0 6px;">
+      <label for="vp" style="min-width:80px;">VP-ID:</label>
+      <input id="vp" type="text" placeholder="z. B. VP001" value="${vpId}"/>
+    </div>
+
+    <div class="row" style="margin-top:12px;">
+      <button class="btn primary" id="startBtn">Start</button>
+      <button class="btn" id="fsBtn">Vollbild anfordern</button>
+    </div>
+
+    <div class="foot">
+      <span class="badge">Fokus-Tracking aktiv</span>
+      <span>1. Verlust = Warnung · 2. = Ende</span>
+    </div>
   `;
+  document.getElementById('startBtn').onclick = () => {
+    const field = document.getElementById('vp');
+    vpId = (field.value || '').trim();
+    if (!vpId) { alert('Bitte eine VP-ID eingeben (z. B. VP001).'); return; }
+    startSurvey();
+  };
+  document.getElementById('fsBtn').onclick = () => {
+    document.documentElement.requestFullscreen?.().catch(()=>{});
+  };
 }
 
-function saveAnswer(i, val) {
-  data[`q${i+1}`] = val;
-  showQuestion(i + 1);
+/* ========= Ablauf ========= */
+let qIndex = 0;
+function startSurvey(){
+  started = true;
+  data.startedAt = new Date().toISOString();
+  data.vp_id = vpId;
+  qIndex = 0;
+  renderQuestion();
 }
 
-// === Google Sheets Integration ===
-const GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwkp-eKXcL6yihE_kGlY7_-capIvF26UuHM9JrVtk68v4NoZKkCAS5cPNnZamQ1dfOFzQ/exec";
+function renderQuestion(){
+  if (qIndex >= questions.length) return finish();
+  const q = questions[qIndex];
+  const leftAnchor = q.anchors?.[0] || '';
+  const rightAnchor = q.anchors?.[1] || '';
 
-function sendDataToGoogle(data) {
+  app.innerHTML = `
+    <h1>Frage ${qIndex+1} von ${questions.length}</h1>
+    <p>${q.text}</p>
+    <div class="likert">
+      ${q.scale.map(v => `<button onclick="saveAnswer(${JSON.stringify(q.id)}, ${v})">${v}</button>`).join('')}
+    </div>
+    <div style="display:flex; justify-content:space-between; gap:10px; margin:4px 0 6px; color:#94a3b8;">
+      <span>${leftAnchor}</span>
+      <span>${rightAnchor}</span>
+    </div>
+    <p style="text-align:center;color:#94a3b8;">(Klicke 1–5 oder nutze die Tastatur 1–5)</p>
+    <div class="foot">
+      <span class="badge">Fokusverluste: ${lostFocusCount}</span>
+      <span class="badge">VP-ID: ${vpId}</span>
+    </div>
+  `;
+  document.onkeydown = (e) => {
+    if (/^[1-5]$/.test(e.key)) saveAnswer(q.id, Number(e.key));
+  };
+}
+
+function saveAnswer(id, val){
+  data[id] = val;
+  qIndex++;
+  renderQuestion();
+}
+
+/* ========= Google Sheets senden + CSV-Backup ========= */
+function sendDataToGoogle(payload){
+  if (!GOOGLE_APPS_SCRIPT_URL) return;
   fetch(GOOGLE_APPS_SCRIPT_URL, {
     method: "POST",
     mode: "no-cors",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data)
-  }).catch(err => console.error("Send error:", err));
+    body: JSON.stringify(payload)
+  }).catch(err => console.warn("Send error:", err));
 }
-
-const urlParams = new URLSearchParams(window.location.search);
-const participantID = urlParams.get("vp") || "anon";
-
-function finish(reason = null) {
-  data.finishedAt = new Date().toISOString();
-  data.lostFocusCount = lostFocusCount;
-  data.participant = participantID;
-  if (reason) data.screenout_reason = reason;
-
-  // 🔹 Sende an Google Sheets
-  sendDataToGoogle(data);
-
-  // 🔹 Lokaler CSV-Download als Backup
-  const keys = Object.keys(data);
-  const vals = keys.map(k => JSON.stringify(data[k] ?? ''));
+function downloadCSV(payload){
+  const keys = Object.keys(payload);
+  const vals = keys.map(k => JSON.stringify(payload[k] ?? ''));
   const csv = keys.join(',') + '\n' + vals.join(',');
-  const blob = new Blob([csv], { type: 'text/csv' });
+  const blob = new Blob([csv], {type:'text/csv'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'survey_data.csv';
   a.click();
+}
 
-  document.body.innerHTML = `
+function finish(reason=null){
+  if (!started) return;
+  started = false;
+  data.finishedAt = new Date().toISOString();
+  data.lostFocusCount = lostFocusCount;
+  if (reason) data.screenout_reason = reason;
+
+  sendDataToGoogle(data);
+  downloadCSV(data);
+
+  app.innerHTML = `
     <h1>Danke!</h1>
+    <p>Die Umfrage ist beendet.${reason ? ` (Grund: ${reason})` : ""}</p>
     <p>Deine Antworten wurden gespeichert.</p>
-    ${reason ? `<p>Beendigungsgrund: ${reason}</p>` : ""}
-    <button onclick="location.reload()">Neu starten</button>
+    <div class="row" style="margin-top:10px;">
+      <button class="btn" onclick="location.reload()">Neu starten</button>
+    </div>
   `;
 }
+
+/* ========= Startanzeige ========= */
+viewStart();
 </script>
 </body>
 </html>
