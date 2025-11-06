@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Beispiel-Umfrage (ohne Server)</title>
+<style>
+  :root { --bg:#0f172a; --fg:#e2e8f0; --muted:#94a3b8; --card:#111827; --accent:#22c55e; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+  .wrap { min-height:100%; display:grid; place-items:center; padding:24px; }
+  .card { width:min(760px,92vw); background:var(--card); border:1px solid #1f2937; border-radius:16px; padding:28px; box-shadow: 0 10px 30px rgba(0,0,0,.35);}
+  h1 { margin:0 0 8px 0; font-size:26px; }
+  p { color:var(--muted); line-height:1.6; }
+  .btn { display:inline-block; padding:12px 22px; border-radius:10px; border:1px solid #2b3545; background:#1f2937; color:var(--fg); cursor:pointer; font-size:16px; }
+  .btn.primary { background:var(--accent); border-color:#16a34a; color:#062813; font-weight:600; }
+  .btn:disabled { opacity:.6; cursor:not-allowed; }
+  .likert { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin:18px 0 8px; }
+  .likert button { width:44px; height:44px; border-radius:50%; border:1px solid #334155; background:#0b1220; color:#cbd5e1; font-size:16px; cursor:pointer; }
+  .likert button:hover { outline:2px solid #475569; }
+  .footer { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:18px; color:#64748b; }
+  .choice { display:grid; gap:10px; margin:16px 0; }
+  .choice button { text-align:left; }
+  input[type="text"] { width:100%; padding:12px 14px; border-radius:10px; border:1px solid #334155; background:#0b1220; color:#e2e8f0; font-size:16px; }
+  .badge { display:inline-block; padding:4px 8px; border-radius:999px; background:#0b1220; border:1px solid #334155; color:#cbd5e1; font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card" id="app">
+    <!-- Inhalt wird per JS gefüllt -->
+  </div>
+</div>
+
+<script>
+/* ==========================
+   Einfache Survey-Engine (ohne Libraries)
+   - Start-Button
+   - Fokus-Tracking: 1. Verlust = Warnung, 2. = Abbruch
+   - 7er-Likert, Text, Choice, Consent
+   - CSV-Download am Ende
+========================== */
+
+const app = document.getElementById('app');
+let idx = -1;
+let lostFocusCount = 0;
+let data = { startedAt: new Date().toISOString() };
+
+const items = [
+  { id:'consent', type:'consent', text:'Ich willige ein, freiwillig teilzunehmen.' },
+  { id:'focus_now', type:'likert', text:'Ich war während dieser Umfrage konzentriert.' },
+  { id:'understood', type:'likert', text:'Die Fragen waren leicht verständlich.' },
+  { id:'effort', type:'likert', text:'Ich habe mir Mühe gegeben, ehrlich zu antworten.' },
+  { id:'attn', type:'likert', text:'Aufmerksamkeitscheck: Bitte wähle hier die 3.' },
+  { id:'age', type:'text', text:'Wie alt bist du? (Zahl eingeben und ENTER oder Weiter klicken)' },
+  { id:'gender', type:'choice', text:'Geschlecht', options:['weiblich','männlich','divers','keine Angabe'] },
+  { id:'feedback', type:'text', text:'Optional: kurzes Feedback zur Umfrage' },
+];
+
+const SCALE = ['1','2','3','4','5','6','7'];
+
+/* ---------- Fokus-Tracking ---------- */
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    lostFocusCount++;
+    if (lostFocusCount === 1) alert('Bitte in der Umfrage bleiben (1. Fokusverlust). Beim zweiten Mal wird beendet.');
+    if (lostFocusCount >= 2) finish('focus_lost_2x');
+  }
+});
+window.addEventListener('blur', () => {
+  lostFocusCount++;
+  if (lostFocusCount === 1) alert('Bitte in der Umfrage bleiben (1. Fokusverlust). Beim zweiten Mal wird beendet.');
+  if (lostFocusCount >= 2) finish('focus_lost_2x');
+});
+
+/* ---------- Screens ---------- */
+function viewStart() {
+  app.innerHTML = `
+    <h1>Beispiel-Umfrage</h1>
+    <p>Bitte bleibe während der Umfrage im aktuellen Fenster (kein Tab-/App-Wechsel). Dauer: ~2–3 Minuten.</p>
+    <div style="display:flex; gap:12px; margin-top:12px;">
+      <button class="btn primary" id="btnStart">Start</button>
+      <button class="btn" id="btnFullscreen">Vollbild anfordern</button>
+    </div>
+    <div class="footer">
+      <span class="badge">Fokus-Tracking aktiv</span>
+      <span>1. Verlust = Warnung · 2. = Ende</span>
+    </div>
+  `;
+  document.getElementById('btnStart').onclick = () => { idx = 0; render(); };
+  document.getElementById('btnFullscreen').onclick = () => {
+    if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(()=>{});
+  };
+}
+
+function render() {
+  if (idx < 0) return viewStart();
+  if (idx >= items.length) return finish();
+
+  const it = items[idx];
+  if (it.type === 'consent') {
+    app.innerHTML = `
+      <h1>Einwilligung</h1>
+      <p>${it.text}</p>
+      <div style="display:flex; gap:12px; margin-top:12px;">
+        <button class="btn primary" id="y">Ich willige ein</button>
+        <button class="btn" id="n">Ablehnen</button>
+      </div>
+    `;
+    document.getElementById('y').onclick = () => { record(it.id, 'yes'); next(); };
+    document.getElementById('n').onclick = () => { record(it.id, 'no'); finish('no_consent'); };
+    return;
+  }
+
+  if (it.type === 'likert') {
+    app.innerHTML = `
+      <h1>Frage ${idx}/${items.length}</h1>
+      <p>${it.text}</p>
+      <div class="likert" id="lk"></div>
+      <p style="text-align:center;color:#94a3b8;">(Klick 1–7 oder Taste 1–7)</p>
+      <div class="footer"><span class="badge">Fokusverluste: ${lostFocusCount}</span><button class="btn" id="skip">Überspringen</button></div>
+    `;
+    const lk = document.getElementById('lk');
+    SCALE.forEach(v => {
+      const b = document.createElement('button');
+      b.textContent = v;
+      b.onclick = () => { record(it.id, Number(v)); next(); };
+      lk.appendChild(b);
+    });
+    document.onkeydown = (e)=>{ if (/^[1-7]$/.test(e.key)) { record(it.id, Number(e.key)); next(); } };
+    document.getElementById('skip').onclick = () => { record(it.id, ''); next(); };
+    return;
+  }
+
+  if (it.type === 'text') {
+    app.innerHTML = `
+      <h1>Frage ${idx}/${items.length}</h1>
+      <p>${it.text}</p>
+      <input type="text" id="txt" autofocus />
+      <div class="footer"><span class="badge">Fokusverluste: ${lostFocusCount}</span>
+      <div style="display:flex; gap:8px;">
+        <button class="btn" id="back">Zurück</button>
+        <button class="btn primary" id="next">Weiter</button>
+      </div></div>
+    `;
+    const inp = document.getElementById('txt');
+    inp.onkeydown = (e)=>{ if (e.key === 'Enter') { record(it.id, inp.value.trim()); next(); } };
+    document.getElementById('next').onclick = ()=>{ record(it.id, inp.value.trim()); next(); };
+    document.getElementById('back').onclick = ()=>{ idx=Math.max(0, idx-1); render(); };
+    return;
+  }
+
+  if (it.type === 'choice') {
+    app.innerHTML = `
+      <h1>Frage ${idx}/${items.length}</h1>
+      <p>${it.text}</p>
+      <div class="choice" id="choices"></div>
+      <div class="footer"><span class="badge">Fokusverluste: ${lostFocusCount}</span></div>
+    `;
+    const c = document.getElementById('choices');
+    it.options.forEach(opt=>{
+      const b = document.createElement('button');
+      b.className = 'btn';
+      b.textContent = opt;
+      b.onclick = ()=>{ record(it.id, opt); next(); };
+      c.appendChild(b);
+    });
+    return;
+  }
+
+  // Fallback
+  app.innerHTML = `<p>Unbekannter Itemtyp.</p><button class="btn primary" onclick="next()">Weiter</button>`;
+}
+
+function next(){ idx++; render(); }
+function record(key, value){ data[key] = value; }
+
+function finish(reason=null){
+  data.finishedAt = new Date().toISOString();
+  data.lostFocusCount = lostFocusCount;
+  if (reason) data.screenout_reason = reason;
+
+  // CSV bauen
+  const keys = Object.keys(data);
+  const vals = keys.map(k => JSON.stringify(data[k] ?? ''));
+  const csv = keys.join(',') + '\n' + vals.join(',');
+
+  // Download auslösen
+  const blob = new Blob([csv], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'survey_data.csv';
+  a.click();
+
+  // Abschlussbildschirm
+  app.innerHTML = `
+    <h1>Danke!</h1>
+    <p>Die Umfrage ist beendet.${reason ? ` (Grund: ${reason})` : ''}</p>
+    <p>Eine Datei <code>survey_data.csv</code> wurde heruntergeladen.</p>
+    <button class="btn" onclick="location.reload()">Neu starten</button>
+  `;
+}
+
+/* Startansicht laden */
+viewStart();
+</script>
+</body>
+</html>
